@@ -1,0 +1,10 @@
+$TTL    1D
+@       IN      SOA     au-team.irpo. root.au-team.irpo. (
+                                2026012400      ; serial
+                                12H             ; refresh
+                                1H              ; retry
+                                1W              ; expire
+                                1H              ; ncache
+                        )
+        IN      NS      au-team.irpo.
+3       IN      PTR     hq-cli.au-team.irpo.

@@ -1,0 +1,17 @@
+$TTL    1D
+@       IN      SOA     au-team.irpo. root.au-team.irpo. (
+                                2026012400      ; serial
+                                12H             ; refresh
+                                1H              ; retry
+                                1W              ; expire
+                                1H              ; ncache
+                        )
+        IN      NS      au-team.irpo.
+        IN      A       192.168.10.2
+hq-rtr  IN      A       172.16.1.2
+br-rtr  IN      A       172.16.2.2
+hq-srv  IN      A       192.168.10.2
+hq-cli  IN      A       192.168.20.3
+br-srv  IN      A       192.168.30.2
+docker  IN      A       172.16.1.1
+web     IN      A       172.16.2.1

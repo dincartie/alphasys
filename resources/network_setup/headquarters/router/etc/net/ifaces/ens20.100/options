@@ -1,0 +1,4 @@
+TYPE=vlan
+HOST=ens20
+VID=100
+BOOTPROTO=static
