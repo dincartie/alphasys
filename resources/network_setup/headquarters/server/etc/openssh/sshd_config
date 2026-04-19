@@ -37,16 +37,9 @@ MaxAuthTries 2
 #MaxSessions 10
 
 #PubkeyAuthentication yes
-#PubkeyAcceptedAlgorithms ssh-ed25519-cert-v01@openssh.com,sk-ssh-ed25519-cert-vv
-01@openssh.com,ssh-ed25519,sk-ssh-ed25519@openssh.com,rsa-sha2-512-cert-v01@openn
-ssh.com,rsa-sha2-512,rsa-sha2-256-cert-v01@openssh.com,rsa-sha2-256,ecdsa-sha2-nn
-istp521-cert-v01@openssh.com,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384-cert-v01@opp
-enssh.com,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256-cert-v01@openssh.com,sk-ecdsa--
-sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp256,sk-ecdsa-sha2-nistp256@opp
-enssh.com
+#PubkeyAcceptedAlgorithms ssh-ed25519-cert-v01@openssh.com,sk-ssh-ed25519-cert-vv01@openssh.com,ssh-ed25519,sk-ssh-ed25519@openssh.com,rsa-sha2-512-cert-v01@opennssh.com,rsa-sha2-512,rsa-sha2-256-cert-v01@openssh.com,rsa-sha2-256,ecdsa-sha2-nnistp521-cert-v01@openssh.com,ecdsa-sha2-nistp521,ecdsa-sha2-nistp384-cert-v01@oppenssh.com,ecdsa-sha2-nistp384,ecdsa-sha2-nistp256-cert-v01@openssh.com,sk-ecdsa--sha2-nistp256-cert-v01@openssh.com,ecdsa-sha2-nistp256,sk-ecdsa-sha2-nistp256@oppenssh.com
 
-#AuthorizedKeysFile     /etc/openssh/authorized_keys/%u /etc/openssh/authorized__
-keys2/%u .ssh/authorized_keys .ssh/authorized_keys2
+#AuthorizedKeysFile     /etc/openssh/authorized_keys/%u /etc/openssh/authorized_keys2/%u .ssh/authorized_keys .ssh/authorized_keys2
 
 #AuthorizedPrincipalsFile none
 

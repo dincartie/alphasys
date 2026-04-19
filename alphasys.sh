@@ -1,399 +1,707 @@
 #!/bin/bash
-# =============================================================================
-#  alphasys — CLI-утилита автоматической настройки сетевой инфраструктуры
-#  Демоэкзамен ФГОС 09.02.06, ALT Server/Workstation 11.x
-# =============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve script directory (supports symlinks via /usr/local/bin)
+SCRIPT_SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_SOURCE" ]; do
+    SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+    SCRIPT_SOURCE="$(readlink "$SCRIPT_SOURCE")"
+    [[ "$SCRIPT_SOURCE" != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
+
 RESOURCES_DIR="${SCRIPT_DIR}/resources"
-VERSION="1.0.0"
-ERRORS=0
 
-# ─────────────────────────────────────────────── Цвета и форматирование
-CLR_RESET="\033[0m"
-CLR_BOLD="\033[1m"
-CLR_RED="\033[0;31m"
-CLR_GREEN="\033[0;32m"
-CLR_YELLOW="\033[0;33m"
-CLR_CYAN="\033[0;36m"
-CLR_DIM="\033[2m"
+# VMID → machine role mapping
+declare -A VMID_ROLE=(
+    [100]="isp"
+    [101]="hq-rtr"
+    [102]="br-rtr"
+    [103]="hq-srv"
+    [104]="br-srv"
+    [105]="hq-cli"
+)
 
-# ─────────────────────────────────────────────────────── Логика вывода
-VERBOSE=0  # устанавливается флагом --output
+declare -A VMID_HOSTNAME=(
+    [100]="isp.au-team.irpo"
+    [101]="hq-rtr.au-team.irpo"
+    [102]="br-rtr.au-team.irpo"
+    [103]="hq-srv.au-team.irpo"
+    [104]="br-srv.au-team.irpo"
+    [105]="hq-cli.au-team.irpo"
+)
 
-log_info() { [ "$VERBOSE" -eq 1 ] && printf "  ${CLR_CYAN}→${CLR_RESET} %s\n" "$*"; }
-log_ok()   { [ "$VERBOSE" -eq 1 ] && printf "  ${CLR_GREEN}✓${CLR_RESET} %s\n" "$*"; }
-log_warn() { [ "$VERBOSE" -eq 1 ] && printf "  ${CLR_YELLOW}!${CLR_RESET} %s\n" "$*"; }
-log_err()  { [ "$VERBOSE" -eq 1 ] && printf "  ${CLR_RED}✗${CLR_RESET} %s\n" "$*"; ERRORS=$((ERRORS+1)); }
-log_step() { [ "$VERBOSE" -eq 1 ] && printf "\n${CLR_BOLD}[ %s ]${CLR_RESET}\n" "$*"; }
-log_svc()  {
-    if [ "$VERBOSE" -eq 1 ]; then
-        local svc="$1"
-        local status
-        status=$(systemctl is-active "$svc" 2>/dev/null)
-        if [ "$status" = "active" ]; then
-            printf "  ${CLR_GREEN}●${CLR_RESET} %-16s %s\n" "$svc" "active"
-        else
-            printf "  ${CLR_RED}●${CLR_RESET} %-16s %s\n" "$svc" "${status:-unknown}"
+# Global state
+MACHINE_ID=""
+MODULE=""
+VERBOSE=false
+HAD_ERROR=false
+
+# Timestamp helper  [HH:MM:SS UTC+N]
+ts() {
+    local tz_offset
+    tz_offset=$(date +%z)          # e.g. +0300 or -0500
+    local sign="${tz_offset:0:1}"
+    local hours="${tz_offset:1:2}"
+    hours="${hours#0}"             # strip leading zero → bare integer
+    local formatted_tz="UTC${sign}${hours}"
+    echo "[$(date +%H:%M:%S) ${formatted_tz}]"
+}
+
+# Logging helpers  — every line prefixed with [HH:MM:SS UTC+N] when -o active
+_p()   { $VERBOSE && echo "$(ts) $*"; }          # raw prefixed print
+info() { _p "[INFO]  $*"; }
+ok()   { _p "[OK]    $*"; }
+warn() { _p "[WARN]  $*"; }
+err()  { $VERBOSE && echo "$(ts) [ERROR] $*" >&2; HAD_ERROR=true; }
+sep()  { _p "------------------------------------------------------------"; }
+
+# Run a command: prefix the command line, then capture output; log errors
+run() {
+    _p ">> $*"
+    if ! "$@" >> /tmp/alphasys_run.log 2>&1; then
+        err "Command failed: $*"
+        return 1
+    fi
+    return 0
+}
+
+# Deploy a file from resources to the system path
+deploy() {
+    local src="$1"   # relative to RESOURCES_DIR
+    local dst="$2"   # absolute destination path
+    local src_path="${RESOURCES_DIR}/${src}"
+
+    if [ ! -f "$src_path" ]; then
+        err "Resource not found: ${src}"
+        return 1
+    fi
+
+    local dst_dir
+    dst_dir="$(dirname "$dst")"
+    if [ ! -d "$dst_dir" ]; then
+        info "Creating directory: ${dst_dir}"
+        run mkdir -p "$dst_dir"
+    fi
+
+    info "Deploying ${src} → ${dst}"
+    run cp -f "$src_path" "$dst"
+}
+
+# Create a directory on the target system
+ensure_dir() {
+    local dir="$1"
+    if [ ! -d "$dir" ]; then
+        info "Creating directory: ${dir}"
+        run mkdir -p "$dir"
+    fi
+}
+
+# show_about  (called when no arguments are provided)
+show_about() {
+    cat <<'EOF'
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║                        alphasys                              ║
+  ║   Network Deployment & Administration Utility                ║
+  ║   Exam: 09.02.06 – Network & System Administration           ║
+  ╚══════════════════════════════════════════════════════════════╝
+
+  DESCRIPTION:
+    Automates VM configuration for the federal demoexam topology.
+    Deploys network settings, routing, tunnels, users and services
+    by machine identifier (Proxmox VMID).
+
+  VMID → ROLE MAP:
+    100 → ISP         101 → HQ-RTR      102 → BR-RTR
+    103 → HQ-SRV      104 → BR-SRV      105 → HQ-CLI
+
+  QUICK START:
+    alphasys -id=101 -mod=network_setup --output
+    alphasys -id=102 -mod=network_admin --output
+    alphasys -id=104 -mod=hybrid
+
+  Run 'alphasys --help' for full option reference.
+
+EOF
+}
+
+# show_help  — layout matches cli_config+logic.md verbatim
+show_help() {
+    cat <<'EOF'
+USAGE: alphasys [options]
+
+DESCRIPTION:
+  A utility designed for deploying and administering network
+  components on target machines by their identifier.
+
+OPTIONS:
+  -id                Machine identifier (Required when using -mod).
+  -mod, --module     Module to execute. Available values:
+                     network_setup : Initial network configuration,
+                     network_admin : Network administration,
+                     hybrid        : Mixed operation mode.
+                     (Only one module can be selected).
+  -o, --output       Enable verbose output for script operations.
+  -h, --help         Show this help message.
+
+EXAMPLE:
+  bash alphasys -id=102 -mod=hybrid --output
+  bash alphasys -id=101 -mod=network_setup
+  bash alphasys --help
+EOF
+}
+
+# Argument parsing
+parse_args() {
+    local has_help=false
+    local has_other=false
+
+    for arg in "$@"; do
+        case "$arg" in
+            -h|--help)        has_help=true ;;
+            -id=*)            has_other=true; MACHINE_ID="${arg#-id=}" ;;
+            -mod=*|--module=*) has_other=true; MODULE="${arg#*=}" ;;
+            -o|--output)      has_other=true; VERBOSE=true ;;
+            *)
+                echo "Error: Unknown option: ${arg}" >&2
+                echo "Run 'alphasys --help' for usage." >&2
+                exit 1
+                ;;
+        esac
+    done
+
+    # Rule D – help flag is exclusive
+    if $has_help && $has_other; then
+        echo "Error: Incompatible flags. Please remove the -h flag to execute the command or remove the other flags to view the help." >&2
+        exit 1
+    fi
+
+    if $has_help; then
+        show_help
+        exit 0
+    fi
+}
+
+# Validation
+validate_args() {
+    # Rule B – -id requires -mod
+    if [ -n "$MACHINE_ID" ] && [ -z "$MODULE" ]; then
+        echo "Error: The -id parameter cannot be used without specifying the module (-mod)." >&2
+        exit 1
+    fi
+
+    # Rule B – -mod requires -id
+    if [ -n "$MODULE" ] && [ -z "$MACHINE_ID" ]; then
+        echo "Error: For the module to work, you must specify the machine ID (-id)." >&2
+        exit 1
+    fi
+
+    # Rule C – validate module value (single, no commas or spaces)
+    if [ -n "$MODULE" ]; then
+        if [[ "$MODULE" == *","* ]] || [[ "$MODULE" == *" "* ]]; then
+            echo "Error: Only one module can be selected at a time. Do not use commas or spaces in -mod." >&2
+            exit 1
+        fi
+        case "$MODULE" in
+            network_setup|network_admin|hybrid) ;;
+            *)
+                echo "Error: Unknown module '${MODULE}'. Valid options: network_setup, network_admin, hybrid." >&2
+                exit 1
+                ;;
+        esac
+    fi
+
+    # Validate VMID
+    if [ -n "$MACHINE_ID" ]; then
+        if [[ ! "$MACHINE_ID" =~ ^[0-9]+$ ]]; then
+            echo "Error: Machine ID must be a numeric Proxmox VMID (e.g. 101)." >&2
+            exit 1
+        fi
+        if [ -z "${VMID_ROLE[$MACHINE_ID]+x}" ]; then
+            echo "Error: Unknown machine ID '${MACHINE_ID}'. Supported IDs: 100, 101, 102, 103, 104, 105." >&2
+            exit 1
         fi
     fi
 }
 
-run() {
-    local desc="$1"; shift
-    log_info "$desc"
-    if "$@" >> /tmp/alphasys.log 2>&1; then
-        log_ok "$desc"
-        return 0
-    else
-        log_err "Ошибка: $desc"
-        return 1
-    fi
+#  module: network_setup
+#  isp (VMID 100)
+ns_isp() {
+    info "network_setup: ${MACHINE_ID}"
+
+    info "Setting hostname: isp.au-team.irpo"
+    run hostnamectl set-hostname isp.au-team.irpo
+
+    # ens20 (to HQ-RTR)
+    info "Configuring ens20 → 172.16.1.1/28"
+    ensure_dir /etc/net/ifaces/ens20
+    deploy "network_setup/isp/etc/net/ifaces/ens20/options"     /etc/net/ifaces/ens20/options
+    deploy "network_setup/isp/etc/net/ifaces/ens20/ipv4address" /etc/net/ifaces/ens20/ipv4address
+
+    # ens21 (to BR-RTR)
+    info "Configuring ens21 → 172.16.2.1/28"
+    ensure_dir /etc/net/ifaces/ens21
+    deploy "network_setup/isp/etc/net/ifaces/ens21/options"     /etc/net/ifaces/ens21/options
+    deploy "network_setup/isp/etc/net/ifaces/ens21/ipv4address" /etc/net/ifaces/ens21/ipv4address
+
+    # IP forwarding
+    info "Enabling IPv4 forwarding"
+    deploy "network_setup/isp/etc/net/sysctl.conf" /etc/net/sysctl.conf
+
+    info "Restarting network"
+    run systemctl restart network
+
+    # firewalld + masquerade (NAT/PAT for HQ and BR)
+    info "Installing firewalld"
+    run apt-get install -y firewalld
+
+    info "Enabling and starting firewalld"
+    run systemctl enable --now firewalld
+
+    info "Configuring firewall zones and masquerade (SNAT/PAT)"
+    run firewall-cmd --permanent --zone=public  --add-interface=ens19
+    run firewall-cmd --permanent --zone=trusted --add-interface=ens20
+    run firewall-cmd --permanent --zone=trusted --add-interface=ens21
+    run firewall-cmd --permanent --zone=public  --add-masquerade
+    run systemctl restart firewalld
+
+    ok "100 VMID network setup complete."
 }
 
-copy_file() {
-    local src="$1" dst="$2"
-    log_info "Копирование → $dst"
-    mkdir -p "$(dirname "$dst")"
-    if cp "$src" "$dst"; then
-        log_ok "$dst"
-    else
-        log_err "Не удалось: $src → $dst"
-    fi
+#  hq-rtr (VMID 101)
+ns_hq_rtr() {
+    info "network_setup: ${MACHINE_ID}"
+
+    info "Setting hostname: hq-rtr.au-team.irpo"
+    run hostnamectl set-hostname hq-rtr.au-team.irpo
+
+    # ens19 (uplink to ISP)
+    info "Configuring ens19 → 172.16.1.2/28, gateway 172.16.1.1"
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/options"      /etc/net/ifaces/ens19/options
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/ipv4address"  /etc/net/ifaces/ens19/ipv4address
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/ipv4route"    /etc/net/ifaces/ens19/ipv4route
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/resolv.conf"  /etc/net/ifaces/ens19/resolv.conf
+
+    # ens20 (trunk, parent for VLANs)
+    info "Configuring ens20 trunk (parent interface for VLANs)"
+    ensure_dir /etc/net/ifaces/ens20
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens20/options" /etc/net/ifaces/ens20/options
+
+    # ens20.100 – VLAN 100 (HQ-SRV segment, /27)
+    info "Configuring ens20.100 → 192.168.10.1/27 (VLAN 100)"
+    ensure_dir /etc/net/ifaces/ens20.100
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.100/options"     /etc/net/ifaces/ens20.100/options
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.100/ipv4address" /etc/net/ifaces/ens20.100/ipv4address
+
+    # ens20.200 – VLAN 200 (HQ-CLI segment, /28)
+    info "Configuring ens20.200 → 192.168.20.1/28 (VLAN 200)"
+    ensure_dir /etc/net/ifaces/ens20.200
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.200/options"     /etc/net/ifaces/ens20.200/options
+    deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.200/ipv4address" /etc/net/ifaces/ens20.200/ipv4address
+
+    # GRE tunnel (tun1)
+    info "Configuring GRE tunnel tun1 → 10.10.10.1/30 (remote: 172.16.2.2)"
+    ensure_dir /etc/net/ifaces/tun1
+    deploy "network_setup/headquarters/router/etc/net/ifaces/tun1/options"     /etc/net/ifaces/tun1/options
+    deploy "network_setup/headquarters/router/etc/net/ifaces/tun1/ipv4address" /etc/net/ifaces/tun1/ipv4address
+
+    # IP forwarding
+    info "Enabling IPv4 forwarding"
+    deploy "network_setup/headquarters/router/etc/net/sysctl.conf" /etc/net/sysctl.conf
+
+    info "Restarting network"
+    run systemctl restart network
+
+    # firewalld + masquerade
+    info "Installing firewalld"
+    run apt-get install -y firewalld
+
+    info "Enabling and starting firewalld"
+    run systemctl enable --now firewalld
+
+    info "Configuring firewall zones and masquerade"
+    run firewall-cmd --permanent --zone=public  --add-interface=ens19
+    run firewall-cmd --permanent --zone=trusted --add-interface=ens20.100
+    run firewall-cmd --permanent --zone=trusted --add-interface=ens20.200
+    run firewall-cmd --permanent --zone=trusted --add-interface=tun1
+    run firewall-cmd --permanent --zone=public  --add-masquerade
+    run firewall-cmd --permanent --add-protocol=gre
+
+    # OSPF forwarding rules
+    info "Adding OSPF / GRE firewall forwarding rules"
+    run firewall-cmd --permanent --zone=trusted --add-port=89/tcp
+    run firewall-cmd --permanent --zone=trusted --add-port=89/udp
+    run firewall-cmd --direct --permanent --add-rule ipv4 filter FORWARD 0 \
+        -i ens19 -o tun1 -j ACCEPT
+    run firewall-cmd --direct --permanent --add-rule ipv4 filter FORWARD 0 \
+        -i tun1 -o ens19 -j ACCEPT
+    run systemctl restart firewalld
+
+    # frr / OSPF
+    info "Installing frr for OSPF dynamic routing"
+    run apt-get install -y frr
+
+    info "Deploying frr daemons config (ospfd=yes)"
+    deploy "network_setup/headquarters/router/etc/frr/daemons" /etc/frr/daemons
+    deploy "network_setup/headquarters/router/etc/frr/frr.conf" /etc/frr/frr.conf
+
+    info "Enabling and starting frr"
+    run systemctl enable --now frr
+
+    # dhcp-server for hq-cli (VLAN 200)
+    info "Installing dhcp-server"
+    run apt-get install -y dhcp-server
+
+    info "Deploying dhcp-server configuration"
+    ensure_dir /etc/sysconfig
+    deploy "network_setup/headquarters/router/etc/sysconfig/dhcpd"  /etc/sysconfig/dhcpd
+    ensure_dir /etc/dhcp
+    deploy "network_setup/headquarters/router/etc/dhcp/dhcpd.conf"  /etc/dhcp/dhcpd.conf
+
+    info "Enabling and starting dhcpd"
+    run systemctl enable --now dhcpd
+
+    ok "102 VMID network setup complete."
 }
 
-copy_tree() {
-    local src_base="$1"
-    find "$src_base" -type f | while read -r src_file; do
-        local rel="${src_file#$src_base}"
-        copy_file "$src_file" "/${rel}"
-    done
+
+#  hq-srv (VMID 103)
+ns_hq_srv() {
+    info "network_setup: ${MACHINE_ID}"
+
+    info "Setting hostname: hq-srv.au-team.irpo"
+    run hostnamectl set-hostname hq-srv.au-team.irpo
+
+    # ens19 (to HQ-RTR via VLAN 100)
+    info "Configuring ens19 → 192.168.10.2/27, gateway 192.168.10.1"
+    deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/options"     /etc/net/ifaces/ens19/options
+    deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/ipv4address" /etc/net/ifaces/ens19/ipv4address
+    deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/ipv4route"   /etc/net/ifaces/ens19/ipv4route
+    deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/resolv.conf" /etc/net/ifaces/ens19/resolv.conf
+
+    info "Restarting network"
+    run systemctl restart network
+
+    # bind
+    info "Installing bind"
+    run apt-get install -y bind
+
+    info "Deploying bind options.conf (forwarder: 77.88.8.8)"
+    ensure_dir /var/lib/bind/etc
+    deploy "network_setup/headquarters/server/var/lib/bind/etc/options.conf" /var/lib/bind/etc/options.conf
+
+    info "Deploying bind local zone declarations"
+    deploy "network_setup/headquarters/server/var/lib/bind/etc/local.conf" /var/lib/bind/etc/local.conf
+
+    info "Deploying DNS forward zone: au-team.irpo"
+    ensure_dir /var/lib/bind/etc/zone
+    deploy "network_setup/headquarters/server/var/lib/bind/etc/zone/au-team.db" /var/lib/bind/etc/zone/au-team.db
+
+    info "Deploying DNS reverse zone: 192.168.10.x (HQ-SRV PTR)"
+    deploy "network_setup/headquarters/server/var/lib/bind/etc/zone/10.db" /var/lib/bind/etc/zone/10.db
+
+    info "Deploying DNS reverse zone: 192.168.20.x (HQ-CLI PTR)"
+    deploy "network_setup/headquarters/server/var/lib/bind/etc/zone/20.db" /var/lib/bind/etc/zone/20.db
+
+    info "Deploying DNS reverse zone: 172.16.1.x (HQ-RTR PTR)"
+    deploy "network_setup/headquarters/server/var/lib/bind/etc/zone/1.db" /var/lib/bind/etc/zone/1.db
+
+    info "Setting zone file ownership"
+    run chown -R named: /var/lib/bind/etc/zone/
+
+    # rndc.key
+    info "Deploying rndc.key"
+    ensure_dir /etc/bind
+    deploy "network_setup/headquarters/server/etc/bind/rndc.key" /etc/bind/rndc.key
+
+    info "Enabling and starting bind"
+    run systemctl enable --now bind
+
+    info "Restarting bind to apply zone config"
+    run systemctl restart bind
+
+    ok "104 VMID network setup complete."
 }
 
-# ──────────────────────────────────────────────────── Показать заставку
-show_about() {
-cat <<EOF
+#  hq-cli (VMID 105)
+ns_hq_cli() {
+    info "network_setup: ${MACHINE_ID}"
+    info "Setting hostname: hq-cli.au-team.irpo"
+    run hostnamectl set-hostname hq-cli.au-team.irpo
 
-${CLR_BOLD}  alphasys${CLR_RESET} v${VERSION}
-  ${CLR_DIM}Network deployment & administration utility${CLR_RESET}
-  ${CLR_DIM}Демоэкзамен ФГОС 09.02.06 — Сетевое и системное администрирование${CLR_RESET}
+    info "HQ-CLI network interface uses DHCP (assigned by HQ-RTR)."
+    info "Ensure ens19 is set to DHCP via the System Control Center GUI:"
+    info "  Main Menu → Show Applications → System Control Center"
+    info "  → Network → Ethernet Interfaces → Configuration: Use DHCP"
+    warn "No automated network file deployment for HQ-CLI (GUI configuration required)."
 
-  Использование: ${CLR_BOLD}bash alphasys -id=<ID> -mod=<MODULE> [--output]${CLR_RESET}
-
-  Доступные машины:
-    ${CLR_CYAN}100${CLR_RESET}  ISP      — Провайдер (NAT, маршрутизация)
-    ${CLR_CYAN}101${CLR_RESET}  HQ-RTR   — Маршрутизатор головного офиса
-    ${CLR_CYAN}102${CLR_RESET}  BR-RTR   — Маршрутизатор филиала
-    ${CLR_CYAN}103${CLR_RESET}  HQ-SRV   — Сервер головного офиса (DNS, SSH)
-    ${CLR_CYAN}104${CLR_RESET}  BR-SRV   — Сервер филиала (SSH)
-    ${CLR_CYAN}105${CLR_RESET}  HQ-CLI   — Рабочая станция головного офиса
-
-  Модули:
-    ${CLR_CYAN}network_setup${CLR_RESET}  — Начальная настройка сети
-    ${CLR_CYAN}network_admin${CLR_RESET}  — Администрирование сети
-    ${CLR_CYAN}hybrid${CLR_RESET}         — Оба модуля
-
-  Подробнее: ${CLR_BOLD}bash alphasys --help${CLR_RESET}
-
-EOF
+    ok "105 VMID hostname set. Manual DHCP configuration required on the GUI."
 }
 
-show_help() {
-cat <<EOF
+#  br-rtr (VMID 102)
+ns_br_rtr() {
+    info "network_setup: ${MACHINE_ID}"
 
-${CLR_BOLD}Usage:${CLR_RESET} alphasys [options]
+    info "Setting hostname: br-rtr.au-team.irpo"
+    run hostnamectl set-hostname br-rtr.au-team.irpo
 
-${CLR_BOLD}DESCRIPTION:${CLR_RESET}
-  A utility designed for deploying and administering network
-  components on target machines by their identifier.
+    # ens19 (uplink to ISP)
+    info "Configuring ens19 → 172.16.2.2/28, gateway 172.16.2.1"
+    deploy "network_setup/branch/router/etc/net/ifaces/ens19/options"     /etc/net/ifaces/ens19/options
+    deploy "network_setup/branch/router/etc/net/ifaces/ens19/ipv4address" /etc/net/ifaces/ens19/ipv4address
+    deploy "network_setup/branch/router/etc/net/ifaces/ens19/ipv4route"   /etc/net/ifaces/ens19/ipv4route
+    deploy "network_setup/branch/router/etc/net/ifaces/ens19/resolv.conf" /etc/net/ifaces/ens19/resolv.conf
 
-${CLR_BOLD}Options:${CLR_RESET}
-  ${CLR_CYAN}-id=<N>${CLR_RESET}            Machine identifier (Required when using -mod).
-  ${CLR_CYAN}-mod, --module${CLR_RESET}     Module to execute. Available values:
-                       network_setup : Initial network configuration,
-                       network_admin : Network administration,
-                       hybrid        : Mixed operation mode.
-                       (Only one module can be selected).
-  ${CLR_CYAN}-o, --output${CLR_RESET}       Enable verbose output for script operations.
-  ${CLR_CYAN}-h, --help${CLR_RESET}         Show this help message.
+    # ens20 (to BR-SRV)
+    info "Configuring ens20 → 192.168.30.1/28"
+    ensure_dir /etc/net/ifaces/ens20
+    deploy "network_setup/branch/router/etc/net/ifaces/ens20/options"     /etc/net/ifaces/ens20/options
+    deploy "network_setup/branch/router/etc/net/ifaces/ens20/ipv4address" /etc/net/ifaces/ens20/ipv4address
 
-${CLR_BOLD}Examples:${CLR_RESET}
-  bash alphasys -id=102 -mod=hybrid --output
-  bash alphasys -id=101 -mod=network_setup
-  bash alphasys --help
+    # GRE tunnel (tun1)
+    info "Configuring GRE tunnel tun1 → 10.10.10.2/30 (remote: 172.16.1.2)"
+    ensure_dir /etc/net/ifaces/tun1
+    deploy "network_setup/branch/router/etc/net/ifaces/tun1/options"     /etc/net/ifaces/tun1/options
+    deploy "network_setup/branch/router/etc/net/ifaces/tun1/ipv4address" /etc/net/ifaces/tun1/ipv4address
 
-${CLR_BOLD}Machine IDs:${CLR_RESET}
-  100 = ISP | 101 = HQ-RTR | 102 = BR-RTR
-  103 = HQ-SRV | 104 = BR-SRV | 105 = HQ-CLI
+    # IP forwarding
+    info "Enabling IPv4 forwarding"
+    deploy "network_setup/branch/router/etc/net/sysctl.conf" /etc/net/sysctl.conf
 
-EOF
+    info "Restarting network"
+    run systemctl restart network
+
+    # firewalld + masquerade
+    info "Installing firewalld"
+    run apt-get install -y firewalld
+
+    info "Enabling and starting firewalld"
+    run systemctl enable --now firewalld
+
+    info "Configuring firewall zones and masquerade"
+    run firewall-cmd --permanent --zone=public  --add-interface=ens19
+    run firewall-cmd --permanent --zone=trusted --add-interface=ens20
+    run firewall-cmd --permanent --zone=trusted --add-interface=tun1
+    run firewall-cmd --permanent --zone=public  --add-masquerade
+    run firewall-cmd --permanent --add-protocol=gre
+
+    # OSPF forwarding rules
+    info "Adding OSPF / GRE firewall forwarding rules"
+    run firewall-cmd --permanent --zone=trusted --add-port=89/tcp
+    run firewall-cmd --permanent --zone=trusted --add-port=89/udp
+    run firewall-cmd --direct --permanent --add-rule ipv4 filter FORWARD 0 \
+        -i ens19 -o tun1 -j ACCEPT
+    run firewall-cmd --direct --permanent --add-rule ipv4 filter FORWARD 0 \
+        -i tun1 -o ens19 -j ACCEPT
+    run systemctl restart firewalld
+
+    # frr / OSPF
+    info "Installing frr for OSPF dynamic routing"
+    run apt-get install -y frr
+
+    info "Deploying frr daemons config (ospfd=yes)"
+    deploy "network_setup/branch/router/etc/frr/daemons"  /etc/frr/daemons
+    deploy "network_setup/branch/router/etc/frr/frr.conf" /etc/frr/frr.conf
+
+    info "Enabling and starting frr"
+    run systemctl enable --now frr
+
+    ok "102 VMID network setup complete."
 }
 
-# ═══════════════════════════════════════════════ MODULE: network_setup
+#  br-srv (VMID 104)
+ns_br_srv() {
+    info "network_setup: ${MACHINE_ID}"
 
-setup_isp() {
-    log_step "ISP — Hostname"
-    run "hostname: isp.au-team.irpo" hostnamectl set-hostname isp.au-team.irpo
+    info "Setting hostname: br-srv.au-team.irpo"
+    run hostnamectl set-hostname br-srv.au-team.irpo
 
-    log_step "ISP — Сетевые интерфейсы"
-    copy_tree "${RESOURCES_DIR}/network_setup/isp"
-    run "sysctl ip_forward" sysctl -p /etc/net/sysctl.conf
-    run "Перезапуск network" systemctl restart network
+    # ens19 (to BR-RTR)
+    info "Configuring ens19 → 192.168.30.2/28, gateway 192.168.30.1"
+    deploy "network_setup/branch/server/etc/net/ifaces/ens19/options"     /etc/net/ifaces/ens19/options
+    deploy "network_setup/branch/server/etc/net/ifaces/ens19/ipv4address" /etc/net/ifaces/ens19/ipv4address
+    deploy "network_setup/branch/server/etc/net/ifaces/ens19/ipv4route"   /etc/net/ifaces/ens19/ipv4route
+    deploy "network_setup/branch/server/etc/net/ifaces/ens19/resolv.conf" /etc/net/ifaces/ens19/resolv.conf
 
-    log_step "ISP — NAT / Firewall"
-    run "masquerade: external" firewall-cmd --permanent --zone=external --add-masquerade
-    run "ens19 → external" firewall-cmd --permanent --zone=external --add-interface=ens19
-    run "ens20 → trusted"  firewall-cmd --permanent --zone=trusted   --add-interface=ens20
-    run "ens21 → trusted"  firewall-cmd --permanent --zone=trusted   --add-interface=ens21
-    run "Перезапуск firewalld" systemctl restart firewalld
+    info "Restarting network"
+    run systemctl restart network
 
-    run "Часовой пояс Europe/Moscow" timedatectl set-timezone Europe/Moscow
-
-    log_step "ISP — Сервисы"
-    log_svc network; log_svc firewalld
+    ok "104 VMID network setup complete."
 }
 
-setup_hq_rtr() {
-    log_step "HQ-RTR — Hostname"
-    run "hostname: hq-rtr.au-team.irpo" hostnamectl set-hostname hq-rtr.au-team.irpo
-
-    log_step "HQ-RTR — Сетевые интерфейсы / VLAN / GRE"
-    copy_tree "${RESOURCES_DIR}/network_setup/headquarters/router"
-    run "sysctl ip_forward" sysctl -p /etc/net/sysctl.conf
-    run "Перезапуск network" systemctl restart network
-
-    log_step "HQ-RTR — Пользователь net_admin"
-    id net_admin &>/dev/null || run "useradd net_admin" useradd net_admin -m -U -s /bin/bash
-    run "passwd net_admin" bash -c "echo 'net_admin:P@ssw0rd' | chpasswd"
-    run "wheel: net_admin"  usermod -aG wheel net_admin
-
-    log_step "HQ-RTR — FRR / OSPF"
-    command -v vtysh &>/dev/null || run "Установка frr" apt-get install -y frr
-    run "enable frr"  systemctl enable frr
-    run "restart frr" systemctl restart frr
-
-    log_step "HQ-RTR — Firewall / NAT"
-    run "gre protocol"      firewall-cmd --permanent --add-protocol=gre
-    run "tun1 → trusted"    firewall-cmd --permanent --zone=trusted   --add-interface=tun1
-    run "masquerade"        firewall-cmd --permanent --zone=external   --add-masquerade
-    run "ens19 → external"  firewall-cmd --permanent --zone=external   --add-interface=ens19
-    run "Перезапуск firewalld" systemctl restart firewalld
-
-    log_step "HQ-RTR — DHCP (ens20.200 → HQ-CLI)"
-    rpm -q dhcp-server &>/dev/null || run "Установка dhcp-server" apt-get install -y dhcp-server
-    run "enable dhcpd"  systemctl enable dhcpd
-    run "restart dhcpd" systemctl restart dhcpd
-
-    run "Часовой пояс Europe/Moscow" timedatectl set-timezone Europe/Moscow
-
-    log_step "HQ-RTR — Сервисы"
-    log_svc network; log_svc firewalld; log_svc frr; log_svc dhcpd
-}
-
-setup_br_rtr() {
-    log_step "BR-RTR — Hostname"
-    run "hostname: br-rtr.au-team.irpo" hostnamectl set-hostname br-rtr.au-team.irpo
-
-    log_step "BR-RTR — Сетевые интерфейсы / GRE"
-    copy_tree "${RESOURCES_DIR}/network_setup/branch/router"
-    run "sysctl ip_forward" sysctl -p /etc/net/sysctl.conf
-    run "Перезапуск network" systemctl restart network
-
-    log_step "BR-RTR — Пользователь net_admin"
-    id net_admin &>/dev/null || run "useradd net_admin" useradd net_admin -m -U -s /bin/bash
-    run "passwd net_admin" bash -c "echo 'net_admin:P@ssw0rd' | chpasswd"
-    run "wheel: net_admin"  usermod -aG wheel net_admin
-
-    log_step "BR-RTR — FRR / OSPF"
-    command -v vtysh &>/dev/null || run "Установка frr" apt-get install -y frr
-    run "enable frr"  systemctl enable frr
-    run "restart frr" systemctl restart frr
-
-    log_step "BR-RTR — Firewall / NAT"
-    run "gre protocol"      firewall-cmd --permanent --add-protocol=gre
-    run "tun1 → trusted"    firewall-cmd --permanent --zone=trusted   --add-interface=tun1
-    run "masquerade"        firewall-cmd --permanent --zone=external   --add-masquerade
-    run "ens19 → external"  firewall-cmd --permanent --zone=external   --add-interface=ens19
-    run "Перезапуск firewalld" systemctl restart firewalld
-
-    run "Часовой пояс Europe/Moscow" timedatectl set-timezone Europe/Moscow
-
-    log_step "BR-RTR — Сервисы"
-    log_svc network; log_svc firewalld; log_svc frr
-}
-
-setup_hq_srv() {
-    log_step "HQ-SRV — Hostname"
-    run "hostname: hq-srv.au-team.irpo" hostnamectl set-hostname hq-srv.au-team.irpo
-
-    log_step "HQ-SRV — Сетевые интерфейсы"
-    copy_tree "${RESOURCES_DIR}/network_setup/headquarters/server"
-    run "Перезапуск network" systemctl restart network
-
-    log_step "HQ-SRV — Пользователь sshuser"
-    id sshuser &>/dev/null || run "useradd sshuser" useradd sshuser -m -U -s /bin/bash
-    run "passwd sshuser"   bash -c "echo 'sshuser:P@ssw0rd' | chpasswd"
-    run "UID 2026"         usermod -u 2026 sshuser
-    run "wheel: sshuser"   usermod -aG wheel sshuser
-
-    log_step "HQ-SRV — SSH"
-    run "enable sshd"  systemctl enable sshd
-    run "restart sshd" systemctl restart sshd
-    run "fw: порт 2026/tcp"   firewall-cmd --permanent --add-port=2026/tcp
-    run "Перезапуск firewalld" systemctl restart firewalld
-
-    log_step "HQ-SRV — DNS (BIND)"
-    rpm -q bind &>/dev/null || run "Установка bind" apt-get install -y bind
-    run "enable bind"  bash -c "systemctl enable bind 2>/dev/null || systemctl enable named"
-    run "restart bind" bash -c "systemctl restart bind 2>/dev/null || systemctl restart named"
-
-    run "Часовой пояс Europe/Moscow" timedatectl set-timezone Europe/Moscow
-
-    log_step "HQ-SRV — Сервисы"
-    log_svc network; log_svc firewalld; log_svc sshd; log_svc bind
-}
-
-setup_br_srv() {
-    log_step "BR-SRV — Hostname"
-    run "hostname: br-srv.au-team.irpo" hostnamectl set-hostname br-srv.au-team.irpo
-
-    log_step "BR-SRV — Сетевые интерфейсы"
-    copy_tree "${RESOURCES_DIR}/network_setup/branch/server"
-    run "Перезапуск network" systemctl restart network
-
-    log_step "BR-SRV — Пользователь sshuser"
-    id sshuser &>/dev/null || run "useradd sshuser" useradd sshuser -m -U -s /bin/bash
-    run "passwd sshuser"  bash -c "echo 'sshuser:P@ssw0rd' | chpasswd"
-    run "UID 2026"        usermod -u 2026 sshuser
-    run "wheel: sshuser"  usermod -aG wheel sshuser
-
-    log_step "BR-SRV — SSH"
-    run "enable sshd"  systemctl enable sshd
-    run "restart sshd" systemctl restart sshd
-    run "fw: порт 2026/tcp"   firewall-cmd --permanent --add-port=2026/tcp
-    run "Перезапуск firewalld" systemctl restart firewalld
-
-    run "Часовой пояс Europe/Moscow" timedatectl set-timezone Europe/Moscow
-
-    log_step "BR-SRV — Сервисы"
-    log_svc network; log_svc firewalld; log_svc sshd
-}
-
-setup_hq_cli() {
-    log_step "HQ-CLI — Hostname"
-    run "hostname: hq-cli.au-team.irpo" hostnamectl set-hostname hq-cli.au-team.irpo
-    run "Часовой пояс Europe/Moscow" timedatectl set-timezone Europe/Moscow
-    log_warn "Сеть HQ-CLI получает адрес по DHCP от HQ-RTR (ens20.200 / VLAN 200)."
-    log_svc network
-}
-
-# ═════════════════════════════════════════════ MODULE: network_admin
-run_network_admin() {
-    local mid="$1"
-    log_step "network_admin — Диагностика ID=${mid}"
-    local -a svcs=()
-    case "$mid" in
-        100) svcs=(network firewalld) ;;
-        101) svcs=(network firewalld frr dhcpd) ;;
-        102) svcs=(network firewalld frr) ;;
-        103) svcs=(network firewalld sshd bind) ;;
-        104) svcs=(network firewalld sshd) ;;
-        105) svcs=(network) ;;
-    esac
-    log_step "network_admin — Сервисы"
-    for svc in "${svcs[@]}"; do log_svc "$svc"; done
-    if [ "$VERBOSE" -eq 1 ]; then
-        printf "\n${CLR_BOLD}[ network_admin — Адреса ]${CLR_RESET}\n"
-        ip -brief addr show 2>/dev/null
-        printf "\n${CLR_BOLD}[ network_admin — Маршруты ]${CLR_RESET}\n"
-        ip route show 2>/dev/null
-    fi
-}
-
+#  Dispatch: network_setup
 run_network_setup() {
-    case "$1" in
-        100) setup_isp ;;
-        101) setup_hq_rtr ;;
-        102) setup_br_rtr ;;
-        103) setup_hq_srv ;;
-        104) setup_br_srv ;;
-        105) setup_hq_cli ;;
+    info "module: network_setup"
+    local role="${VMID_ROLE[$MACHINE_ID]}"
+    case "$role" in
+        isp)    ns_isp ;;
+        hq-rtr) ns_hq_rtr ;;
+        hq-srv) ns_hq_srv ;;
+        hq-cli) ns_hq_cli ;;
+        br-rtr) ns_br_rtr ;;
+        br-srv) ns_br_srv ;;
     esac
 }
 
-# ════════════════════════════════════════════════════════ АРГУМЕНТЫ
-ARG_ID=""
-ARG_MOD=""
-ARG_HELP=0
+#  module: network_admin
+#  Create users on HQ-SRV / BR-SRV (sshuser, UID 2026, SSH hardening)
+na_server() {
+    local role="$1"   # "hq-srv" or "br-srv"
+    info "network_admin: ${MACHINE_ID}"
 
-for arg in "$@"; do
-    case "$arg" in
-        -id=*)             ARG_ID="${arg#-id=}" ;;
-        -mod=*|--module=*) ARG_MOD="${arg#*=}" ;;
-        -o|--output)       VERBOSE=1 ;;
-        -h|--help)         ARG_HELP=1 ;;
-        *)
-            printf "Ошибка: Неизвестный аргумент: %s\n" "$arg" >&2
-            exit 1 ;;
+    # Create sshuser with UID 2026
+    if id sshuser &>/dev/null; then
+        info "User 'sshuser' already exists — skipping creation."
+    else
+        info "Creating user: sshuser (UID 2026)"
+        run useradd sshuser -m -U -s /bin/bash
+    fi
+
+    info "Setting UID 2026 for sshuser"
+    run usermod -u 2026 sshuser
+
+    info "Setting password for sshuser (P@ssw0rd)"
+    echo "sshuser:P@ssw0rd" | run chpasswd
+
+    info "Adding sshuser to wheel group (sudo access)"
+    run usermod -aG wheel sshuser
+
+    # Sudoers
+    local sudoers_src
+    if [ "$role" = "hq-srv" ]; then
+        sudoers_src="network_setup/headquarters/server/etc/sudoers"
+    else
+        sudoers_src="network_setup/branch/server/etc/sudoers"
+    fi
+    info "Deploying sudoers (NOPASSWD for sshuser)"
+    run chmod 740 /etc/sudoers
+    deploy "$sudoers_src" /etc/sudoers
+    run chmod 440 /etc/sudoers
+
+    # SSH hardening (port 2026, AllowUsers sshuser, MaxAuthTries 2, Banner)
+    local ssh_src banner_src
+    if [ "$role" = "hq-srv" ]; then
+        ssh_src="network_setup/headquarters/server/etc/openssh/sshd_config"
+        banner_src="network_setup/headquarters/server/etc/openssh/banner"
+    else
+        ssh_src="network_setup/branch/server/etc/openssh/sshd_config"
+        banner_src="network_setup/branch/server/etc/openssh/banner"
+    fi
+
+    info "Deploying sshd_config (port 2026, AllowUsers sshuser, MaxAuthTries 2)"
+    ensure_dir /etc/openssh
+    deploy "$ssh_src"    /etc/openssh/sshd_config
+    deploy "$banner_src" /etc/openssh/banner
+
+    info "Restarting sshd"
+    run systemctl restart sshd
+
+    ok "${role^^} user and SSH configuration complete."
+}
+
+# ---------------------------------------------------------------------------
+#  Create users on HQ-RTR / BR-RTR (net_admin, sudo NOPASSWD)
+# ---------------------------------------------------------------------------
+na_router() {
+    local role="$1"   # "hq-rtr" or "br-rtr"
+    info "network_admin: ${MACHINE_ID}"
+
+    # Create net_admin
+    if id net_admin &>/dev/null; then
+        info "User 'net_admin' already exists — skipping creation."
+    else
+        info "Creating user: net_admin"
+        run useradd net_admin -m -U -s /bin/bash
+    fi
+
+    info "Setting password for net_admin (P@ssw0rd)"
+    echo "net_admin:P@ssw0rd" | run chpasswd
+
+    info "Adding net_admin to wheel group"
+    run usermod -aG wheel net_admin
+
+    # Sudoers
+    local sudoers_src
+    if [ "$role" = "hq-rtr" ]; then
+        sudoers_src="network_setup/headquarters/router/etc/sudoers"
+    else
+        sudoers_src="network_setup/branch/router/etc/sudoers"
+    fi
+    info "Deploying sudoers (NOPASSWD for net_admin)"
+    run chmod 740 /etc/sudoers
+    deploy "$sudoers_src" /etc/sudoers
+    run chmod 440 /etc/sudoers
+
+    ok "${role^^} user configuration complete."
+}
+
+# ---------------------------------------------------------------------------
+#  Dispatch: network_admin
+# ---------------------------------------------------------------------------
+run_network_admin() {
+    info "--- Module: network_admin ---"
+    local role="${VMID_ROLE[$MACHINE_ID]}"
+    case "$role" in
+        hq-srv) na_server "hq-srv" ;;
+        br-srv) na_server "br-srv" ;;
+        hq-rtr) na_router "hq-rtr" ;;
+        br-rtr) na_router "br-rtr" ;;
+        isp)    warn "No network_admin tasks defined for ISP." ;;
+        hq-cli) warn "No network_admin tasks defined for HQ-CLI." ;;
     esac
-done
+}
 
-# Г. -h + другие флаги → ошибка
-if [ "$ARG_HELP" -eq 1 ] && { [ -n "$ARG_ID" ] || [ -n "$ARG_MOD" ] || [ "$VERBOSE" -eq 1 ]; }; then
-    printf "Ошибка: Несовместимые флаги. Пожалуйста, уберите флаг -h для выполнения команды или уберите остальные флаги для просмотра справки.\n" >&2
-    exit 1
-fi
-[ "$ARG_HELP" -eq 1 ] && { show_help; exit 0; }
+# ===========================================================================
+#  Main
+# ===========================================================================
+main() {
+    # No arguments → show about
+    if [ $# -eq 0 ]; then
+        show_about
+        exit 0
+    fi
 
-# А. Нет аргументов → about
-[ "$#" -eq 0 ] && { show_about; exit 0; }
-[ "$VERBOSE" -eq 1 ] && [ -z "$ARG_ID" ] && [ -z "$ARG_MOD" ] && { show_about; exit 0; }
+    parse_args "$@"
+    validate_args
 
-# Б. -id без -mod
-[ -n "$ARG_ID" ] && [ -z "$ARG_MOD" ] && {
-    printf "Ошибка: Параметр -id не может быть использован без указания модуля (-mod).\n" >&2; exit 1; }
+    # Initialise run log
+    : > /tmp/alphasys_run.log
 
-# Б. -mod без -id
-[ -n "$ARG_MOD" ] && [ -z "$ARG_ID" ] && {
-    printf "Ошибка: Для работы модуля необходимо указать идентификатор машины (-id).\n" >&2; exit 1; }
+    local role="${VMID_ROLE[$MACHINE_ID]}"
+    local hostname="${VMID_HOSTNAME[$MACHINE_ID]}"
 
-# В. Проверка модуля
-case "$ARG_MOD" in
-    network_setup|network_admin|hybrid) ;;
-    *,*|*\ *)
-        printf "Ошибка: Допустимо указать только один модуль. Доступные: network_setup, network_admin, hybrid.\n" >&2; exit 1 ;;
-    *)
-        printf "Ошибка: Неизвестный модуль '%s'. Доступные: network_setup, network_admin, hybrid.\n" "$ARG_MOD" >&2; exit 1 ;;
-esac
+    sep
+    _p "  alphasys starting"
+    _p "  Machine ID : ${MACHINE_ID}  (${role}  /  ${hostname})"
+    _p "  Module     : ${MODULE}"
+    sep
 
-# Проверка ID
-case "$ARG_ID" in
-    100|101|102|103|104|105) ;;
-    *)
-        printf "Ошибка: Неизвестный ID '%s'. Допустимые: 100–105.\n" "$ARG_ID" >&2; exit 1 ;;
-esac
+    case "$MODULE" in
+        network_setup)
+            run_network_setup
+            ;;
+        network_admin)
+            run_network_admin
+            ;;
+        hybrid)
+            run_network_setup
+            run_network_admin
+            ;;
+    esac
 
-# ════════════════════════════════════════════════════════════ ЗАПУСК
-: > /tmp/alphasys.log
+    sep
 
-[ "$VERBOSE" -eq 1 ] && printf "\n${CLR_BOLD}  alphasys${CLR_RESET} ${CLR_DIM}v${VERSION}${CLR_RESET}  id=${CLR_CYAN}${ARG_ID}${CLR_RESET}  mod=${CLR_CYAN}${ARG_MOD}${CLR_RESET}\n"
+    if $HAD_ERROR; then
+        _p "  Result: FAILED  (see /tmp/alphasys_run.log for details)"
+        sep
+        if ! $VERBOSE; then echo "alphasys: failed."; fi
+        exit 1
+    else
+        _p "  Result: SUCCESS"
+        sep
+        if ! $VERBOSE; then echo "alphasys: success."; fi
+        exit 0
+    fi
+}
 
-case "$ARG_MOD" in
-    network_setup) run_network_setup "$ARG_ID" ;;
-    network_admin) run_network_admin "$ARG_ID" ;;
-    hybrid)
-        run_network_setup "$ARG_ID"
-        run_network_admin "$ARG_ID" ;;
-esac
-
-# ════════════════════════════════════════════════════════════════ ИТОГ
-[ "$VERBOSE" -eq 1 ] && printf "\n"
-if [ "$ERRORS" -eq 0 ]; then
-    [ "$VERBOSE" -eq 1 ] && printf "${CLR_GREEN}${CLR_BOLD}  alphasys: success.${CLR_RESET}\n\n" \
-                         || printf "alphasys: success.\n"
-else
-    [ "$VERBOSE" -eq 1 ] && printf "${CLR_RED}${CLR_BOLD}  alphasys: failed.${CLR_RESET}${CLR_DIM}  ошибок: ${ERRORS} | лог: /tmp/alphasys.log${CLR_RESET}\n\n" \
-                         || printf "alphasys: failed.\n"
-fi
-
-exit "$ERRORS"
+main "$@"
