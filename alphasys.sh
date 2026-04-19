@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
 
 RESOURCES_DIR="${SCRIPT_DIR}/resources"
 
-# VMID → machine role mapping
+# VMID - machine role mapping
 declare -A VMID_ROLE=(
     [100]="isp"
     [101]="hq-rtr"
@@ -42,7 +42,7 @@ ts() {
     tz_offset=$(date +%z)          # e.g. +0300 or -0500
     local sign="${tz_offset:0:1}"
     local hours="${tz_offset:1:2}"
-    hours="${hours#0}"             # strip leading zero → bare integer
+    hours="${hours#0}"             # strip leading zero - bare integer
     local formatted_tz="UTC${sign}${hours}"
     echo "[$(date +%H:%M:%S) ${formatted_tz}]"
 }
@@ -83,7 +83,7 @@ deploy() {
         run mkdir -p "$dst_dir"
     fi
 
-    info "Deploying ${src} → ${dst}"
+    info "Deploying ${src} - ${dst}"
     run cp -f "$src_path" "$dst"
 }
 
@@ -99,29 +99,26 @@ ensure_dir() {
 # show_about  (called when no arguments are provided)
 show_about() {
     cat <<'EOF'
+USAGE: alphasys [options]
 
-  ╔══════════════════════════════════════════════════════════════╗
-  ║                        alphasys                              ║
-  ║   Network Deployment & Administration Utility                ║
-  ║   Exam: 09.02.06 – Network & System Administration           ║
-  ╚══════════════════════════════════════════════════════════════╝
+DESCRIPTION:
+  A utility designed for deploying and administering network
+  components on target machines by their identifier.
 
-  DESCRIPTION:
-    Automates VM configuration for the federal demoexam topology.
-    Deploys network settings, routing, tunnels, users and services
-    by machine identifier (Proxmox VMID).
+OPTIONS:
+  -id                Machine identifier (Required when using -mod).
+  -mod, --module     Module to execute. Available values:
+                     network_setup : Initial network configuration,
+                     network_admin : Network administration,
+                     hybrid        : Mixed operation mode.
+                     (Only one module can be selected).
+  -o, --output       Enable verbose output for script operations.
+  -h, --help         Show this help message.
 
-  VMID → ROLE MAP:
-    100 → ISP         101 → HQ-RTR      102 → BR-RTR
-    103 → HQ-SRV      104 → BR-SRV      105 → HQ-CLI
-
-  QUICK START:
-    alphasys -id=101 -mod=network_setup --output
-    alphasys -id=102 -mod=network_admin --output
-    alphasys -id=104 -mod=hybrid
-
-  Run 'alphasys --help' for full option reference.
-
+EXAMPLE:
+  bash alphasys -id=102 -mod=hybrid --output
+  bash alphasys -id=101 -mod=network_setup
+  bash alphasys --help
 EOF
 }
 
@@ -233,13 +230,13 @@ ns_isp() {
     run hostnamectl set-hostname isp.au-team.irpo
 
     # ens20 (to HQ-RTR)
-    info "Configuring ens20 → 172.16.1.1/28"
+    info "Configuring ens20 - 172.16.1.1/28"
     ensure_dir /etc/net/ifaces/ens20
     deploy "network_setup/isp/etc/net/ifaces/ens20/options"     /etc/net/ifaces/ens20/options
     deploy "network_setup/isp/etc/net/ifaces/ens20/ipv4address" /etc/net/ifaces/ens20/ipv4address
 
     # ens21 (to BR-RTR)
-    info "Configuring ens21 → 172.16.2.1/28"
+    info "Configuring ens21 - 172.16.2.1/28"
     ensure_dir /etc/net/ifaces/ens21
     deploy "network_setup/isp/etc/net/ifaces/ens21/options"     /etc/net/ifaces/ens21/options
     deploy "network_setup/isp/etc/net/ifaces/ens21/ipv4address" /etc/net/ifaces/ens21/ipv4address
@@ -276,7 +273,7 @@ ns_hq_rtr() {
     run hostnamectl set-hostname hq-rtr.au-team.irpo
 
     # ens19 (uplink to ISP)
-    info "Configuring ens19 → 172.16.1.2/28, gateway 172.16.1.1"
+    info "Configuring ens19 - 172.16.1.2/28, gateway 172.16.1.1"
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/options"      /etc/net/ifaces/ens19/options
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/ipv4address"  /etc/net/ifaces/ens19/ipv4address
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens19/ipv4route"    /etc/net/ifaces/ens19/ipv4route
@@ -288,19 +285,19 @@ ns_hq_rtr() {
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens20/options" /etc/net/ifaces/ens20/options
 
     # ens20.100 – VLAN 100 (HQ-SRV segment, /27)
-    info "Configuring ens20.100 → 192.168.10.1/27 (VLAN 100)"
+    info "Configuring ens20.100 - 192.168.10.1/27 (VLAN 100)"
     ensure_dir /etc/net/ifaces/ens20.100
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.100/options"     /etc/net/ifaces/ens20.100/options
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.100/ipv4address" /etc/net/ifaces/ens20.100/ipv4address
 
     # ens20.200 – VLAN 200 (HQ-CLI segment, /28)
-    info "Configuring ens20.200 → 192.168.20.1/28 (VLAN 200)"
+    info "Configuring ens20.200 - 192.168.20.1/28 (VLAN 200)"
     ensure_dir /etc/net/ifaces/ens20.200
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.200/options"     /etc/net/ifaces/ens20.200/options
     deploy "network_setup/headquarters/router/etc/net/ifaces/ens20.200/ipv4address" /etc/net/ifaces/ens20.200/ipv4address
 
     # GRE tunnel (tun1)
-    info "Configuring GRE tunnel tun1 → 10.10.10.1/30 (remote: 172.16.2.2)"
+    info "Configuring GRE tunnel tun1 - 10.10.10.1/30 (remote: 172.16.2.2)"
     ensure_dir /etc/net/ifaces/tun1
     deploy "network_setup/headquarters/router/etc/net/ifaces/tun1/options"     /etc/net/ifaces/tun1/options
     deploy "network_setup/headquarters/router/etc/net/ifaces/tun1/ipv4address" /etc/net/ifaces/tun1/ipv4address
@@ -373,7 +370,7 @@ ns_hq_srv() {
     run hostnamectl set-hostname hq-srv.au-team.irpo
 
     # ens19 (to HQ-RTR via VLAN 100)
-    info "Configuring ens19 → 192.168.10.2/27, gateway 192.168.10.1"
+    info "Configuring ens19 - 192.168.10.2/27, gateway 192.168.10.1"
     deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/options"     /etc/net/ifaces/ens19/options
     deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/ipv4address" /etc/net/ifaces/ens19/ipv4address
     deploy "network_setup/headquarters/server/etc/net/ifaces/ens19/ipv4route"   /etc/net/ifaces/ens19/ipv4route
@@ -431,8 +428,8 @@ ns_hq_cli() {
 
     info "HQ-CLI network interface uses DHCP (assigned by HQ-RTR)."
     info "Ensure ens19 is set to DHCP via the System Control Center GUI:"
-    info "  Main Menu → Show Applications → System Control Center"
-    info "  → Network → Ethernet Interfaces → Configuration: Use DHCP"
+    info "  Main Menu - Show Applications - System Control Center"
+    info "  - Network - Ethernet Interfaces - Configuration: Use DHCP"
     warn "No automated network file deployment for HQ-CLI (GUI configuration required)."
 
     ok "105 VMID hostname set. Manual DHCP configuration required on the GUI."
@@ -446,20 +443,20 @@ ns_br_rtr() {
     run hostnamectl set-hostname br-rtr.au-team.irpo
 
     # ens19 (uplink to ISP)
-    info "Configuring ens19 → 172.16.2.2/28, gateway 172.16.2.1"
+    info "Configuring ens19 - 172.16.2.2/28, gateway 172.16.2.1"
     deploy "network_setup/branch/router/etc/net/ifaces/ens19/options"     /etc/net/ifaces/ens19/options
     deploy "network_setup/branch/router/etc/net/ifaces/ens19/ipv4address" /etc/net/ifaces/ens19/ipv4address
     deploy "network_setup/branch/router/etc/net/ifaces/ens19/ipv4route"   /etc/net/ifaces/ens19/ipv4route
     deploy "network_setup/branch/router/etc/net/ifaces/ens19/resolv.conf" /etc/net/ifaces/ens19/resolv.conf
 
     # ens20 (to BR-SRV)
-    info "Configuring ens20 → 192.168.30.1/28"
+    info "Configuring ens20 - 192.168.30.1/28"
     ensure_dir /etc/net/ifaces/ens20
     deploy "network_setup/branch/router/etc/net/ifaces/ens20/options"     /etc/net/ifaces/ens20/options
     deploy "network_setup/branch/router/etc/net/ifaces/ens20/ipv4address" /etc/net/ifaces/ens20/ipv4address
 
     # GRE tunnel (tun1)
-    info "Configuring GRE tunnel tun1 → 10.10.10.2/30 (remote: 172.16.1.2)"
+    info "Configuring GRE tunnel tun1 - 10.10.10.2/30 (remote: 172.16.1.2)"
     ensure_dir /etc/net/ifaces/tun1
     deploy "network_setup/branch/router/etc/net/ifaces/tun1/options"     /etc/net/ifaces/tun1/options
     deploy "network_setup/branch/router/etc/net/ifaces/tun1/ipv4address" /etc/net/ifaces/tun1/ipv4address
@@ -517,7 +514,7 @@ ns_br_srv() {
     run hostnamectl set-hostname br-srv.au-team.irpo
 
     # ens19 (to BR-RTR)
-    info "Configuring ens19 → 192.168.30.2/28, gateway 192.168.30.1"
+    info "Configuring ens19 - 192.168.30.2/28, gateway 192.168.30.1"
     deploy "network_setup/branch/server/etc/net/ifaces/ens19/options"     /etc/net/ifaces/ens19/options
     deploy "network_setup/branch/server/etc/net/ifaces/ens19/ipv4address" /etc/net/ifaces/ens19/ipv4address
     deploy "network_setup/branch/server/etc/net/ifaces/ens19/ipv4route"   /etc/net/ifaces/ens19/ipv4route
@@ -655,7 +652,7 @@ run_network_admin() {
 #  Main
 # ===========================================================================
 main() {
-    # No arguments → show about
+    # No arguments - show about
     if [ $# -eq 0 ]; then
         show_about
         exit 0
