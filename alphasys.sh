@@ -96,32 +96,6 @@ ensure_dir() {
     fi
 }
 
-# show_about  (called when no arguments are provided)
-show_about() {
-    cat <<'EOF'
-USAGE: alphasys [options]
-
-DESCRIPTION:
-  A utility designed for deploying and administering network
-  components on target machines by their identifier.
-
-OPTIONS:
-  -id                Machine identifier (Required when using -mod).
-  -mod, --module     Module to execute. Available values:
-                     network_setup : Initial network configuration,
-                     network_admin : Network administration,
-                     hybrid        : Mixed operation mode.
-                     (Only one module can be selected).
-  -o, --output       Enable verbose output for script operations.
-  -h, --help         Show this help message.
-
-EXAMPLE:
-  bash alphasys -id=102 -mod=hybrid --output
-  bash alphasys -id=101 -mod=network_setup
-  bash alphasys --help
-EOF
-}
-
 # show_help  — layout matches cli_config+logic.md verbatim
 show_help() {
     cat <<'EOF'
@@ -596,9 +570,7 @@ na_server() {
     ok "${role^^} user and SSH configuration complete."
 }
 
-# ---------------------------------------------------------------------------
 #  Create users on HQ-RTR / BR-RTR (net_admin, sudo NOPASSWD)
-# ---------------------------------------------------------------------------
 na_router() {
     local role="$1"   # "hq-rtr" or "br-rtr"
     info "network_admin: ${MACHINE_ID}"
@@ -632,9 +604,7 @@ na_router() {
     ok "${role^^} user configuration complete."
 }
 
-# ---------------------------------------------------------------------------
 #  Dispatch: network_admin
-# ---------------------------------------------------------------------------
 run_network_admin() {
     info "--- Module: network_admin ---"
     local role="${VMID_ROLE[$MACHINE_ID]}"
@@ -648,13 +618,11 @@ run_network_admin() {
     esac
 }
 
-# ===========================================================================
 #  Main
-# ===========================================================================
 main() {
-    # No arguments - show about
+    # No arguments - show help
     if [ $# -eq 0 ]; then
-        show_about
+        show_help
         exit 0
     fi
 
