@@ -192,7 +192,7 @@ ns_isp() {
     deploy "network_setup/isp/etc/net/ifaces/ens21/ipv4address" /etc/net/ifaces/ens21/ipv4address
 
     info "Enabling IPv4 forwarding"
-    deploy "network_setup/isp/etc/net/sysctl.conf" /etc/net/sysctl.conf
+    deploy "common/sysctl.conf" /etc/net/sysctl.conf
 
     info "Restarting network"
     run systemctl restart network
@@ -246,7 +246,7 @@ ns_hq_router() {
     deploy "network_setup/headquarters/router/etc/net/ifaces/tun1/ipv4address" /etc/net/ifaces/tun1/ipv4address
 
     info "Enabling IPv4 forwarding"
-    deploy "network_setup/headquarters/router/etc/net/sysctl.conf" /etc/net/sysctl.conf
+    deploy "common/sysctl.conf" /etc/net/sysctl.conf
 
     info "Restarting network"
     run systemctl restart network
@@ -336,7 +336,7 @@ ns_br_router() {
     deploy "network_setup/branch/router/etc/net/ifaces/tun1/ipv4address" /etc/net/ifaces/tun1/ipv4address
 
     info "Enabling IPv4 forwarding"
-    deploy "network_setup/branch/router/etc/net/sysctl.conf" /etc/net/sysctl.conf
+    deploy "common/sysctl.conf" /etc/net/sysctl.conf
 
     info "Restarting network"
     run systemctl restart network
