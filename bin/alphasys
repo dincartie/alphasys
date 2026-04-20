@@ -56,19 +56,24 @@ err()  {
     HAD_ERROR=true
 }
 
+LOGFILE="/root/tmp/alphasys/syslog"
+
 run() {
     _p "> $*"
+    mkdir -p "$(dirname "$LOGFILE")"
     if $VERBOSE; then
         local _tmp
         _tmp=$(mktemp)
-        { "$@" 2>&1; echo "$?" > "$_tmp"; } \
-            | tee -a /root/alphasys_result.log \
-            | while IFS= read -r line; do echo "$(ts)     ${line}"; done
-        local _ret
+        "$@" 2>&1 | tee -a "$LOGFILE" | while IFS= read -r line; do
+            echo "$(ts)     ${line}"
+        done
+        # capture exit code of the actual command (first in pipe), not tee
+        local _ret="${PIPESTATUS[0]}"
+        echo "$_ret" > "$_tmp"
         _ret=$(cat "$_tmp"); rm -f "$_tmp"
         if [ "$_ret" -ne 0 ]; then err "Command failed: $*"; return 1; fi
     else
-        if ! "$@" >> /root/alphasys_result.log 2>&1; then
+        if ! "$@" >> "$LOGFILE" 2>&1; then
             err "Command failed: $*"
             return 1
         fi
@@ -566,13 +571,13 @@ main() {
     parse_args "$@"
     validate_args
 
-    : > /root/alphasys_result.log
+    mkdir -p "$(dirname "$LOGFILE")"
+    : > "$LOGFILE"
 
     local role="${VMID_ROLE[$MACHINE_ID]}"
     local hostname="${VMID_HOSTNAME[$MACHINE_ID]}"
 
-    _p " alphasys starting"
-    _p " Machine ID : ${MACHINE_ID}  (${role}  /  ${hostname})"
+    _p " Machine ID: ${MACHINE_ID} (${hostname})"
 
     case "$MODULE" in
         network_setup) run_network_setup ;;
@@ -581,12 +586,12 @@ main() {
     esac
 
     if $HAD_ERROR; then
-        _p "failed. (see /root/alphasys_result.log for details)"
-        if ! $VERBOSE; then echo "alphasys: failed."; fi
+        _p "failed. (see ${LOGFILE} for details)"
+        if ! $VERBOSE; then echo "failed. (see ${LOGFILE} for details)"; fi
         exit 1
     else
-        _p "success."
-        if ! $VERBOSE; then echo "alphasys: success."; fi
+        _p "completed successfully."
+        if ! $VERBOSE; then echo "completed successfully."; fi
         exit 0
     fi
 }
