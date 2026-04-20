@@ -4,8 +4,6 @@
 Specialty: **09.02.06 — Network & System Administration**
 Platform: Proxmox VMs running ALT Server 11.0 / ALT Workstation 11.1 (x86_64)
 
----
-
 ## Overview
 
 `alphasys` automates the full initial configuration of every virtual machine
@@ -18,8 +16,6 @@ All configuration files (interface settings, FRR configs, BIND zone files,
 DHCP config, sshd_config, sudoers, etc.) are stored as ready-to-deploy
 resources inside the `resources/` directory and are copied directly to their
 target paths on the system.
-
----
 
 ## Network Topology
 
@@ -50,8 +46,6 @@ target paths on the system.
 | BR-SRV | ens19       | 192.168.30.2   | /28  | —    |
 | HQ-CLI | ens19       | DHCP           | /28  | 200  |
 
----
-
 ## Project Structure
 
 ```
@@ -59,8 +53,8 @@ alphasys/
 ├── bin/
 │   └── alphasys          # Main executable script
 ├── guides/
-│   ├── iptable           #
-│   └── xterm.js          #
+│   ├── iptable           # Addressing table
+│   └── xterm.js          # How to enable xterm.js
 ├── resources/
 │   └── network_setup/
 │       ├── common/       # Frequently used files
@@ -74,8 +68,6 @@ alphasys/
 ├── install.sh            # Installer
 └── README.md
 ```
-
----
 
 ## Installation
 
@@ -91,8 +83,6 @@ The installer:
 2. Creates a symlink `/usr/local/bin/alphasys → /root/alphasys/bin/alphasys`
 
 After installation `alphasys` is available as a global command.
-
----
 
 ## Usage
 
@@ -122,8 +112,6 @@ alphasys --vmid=103 -mod=network_setup --output
 alphasys --vmid=104 -mod=network_setup
 ```
 
----
-
 ## Modules
 
 ### ✅ network_setup — fully implemented
@@ -147,19 +135,17 @@ Planned: additional user and access management tasks beyond initial setup.
 
 Planned: combined operation mode running multiple configuration stages.
 
----
-
 ## Output & Logging
 
-All command output is always written to `/root/alphasys_result.log`.
+All command output is always written to `/root/tmp/alphasys/syslog`.
 
 With `--output`, every action is printed to the console in real time:
 
 ```
-[14:22:01 UTC+3] [INFO]  network_setup: 101
+[14:22:01 UTC+3] [INFO] network_setup: 101
 [14:22:01 UTC+3] >> hostnamectl set-hostname hq-rtr.au-team.irpo
 [14:22:01 UTC+3]     (command output lines...)
-[14:22:04 UTC+3] [INFO]  Installing firewalld
+[14:22:04 UTC+3] [INFO] Installing firewalld
 [14:22:04 UTC+3] >> apt-get install -y firewalld
 [14:22:04 UTC+3]     Reading package lists...
 [14:22:06 UTC+3] [ERROR] Command failed: ...   ← errors highlighted in red
@@ -168,11 +154,9 @@ With `--output`, every action is printed to the console in real time:
 Without `--output` (silent mode), only the final result is printed:
 
 ```
-alphasys: success.
-alphasys: failed.
+completed successfully.
+failed.
 ```
-
----
 
 ## Credentials
 
