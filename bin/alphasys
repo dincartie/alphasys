@@ -48,7 +48,7 @@ ts() {
 }
 
 _p()   { $VERBOSE && echo "$(ts) $*"; }
-info() { _p "[INFO]  $*"; }
+info() { _p "[INFO] $*"; }
 ok()   { _p "$*"; }
 warn() { _p "$*"; }
 err()  {
@@ -581,11 +581,11 @@ main() {
     esac
 
     if $HAD_ERROR; then
-        _p "Result: failed.  (see /root/alphasys_result.log for details)"
+        _p "failed. (see /root/alphasys_result.log for details)"
         if ! $VERBOSE; then echo "alphasys: failed."; fi
         exit 1
     else
-        _p "Result: success."
+        _p "success."
         if ! $VERBOSE; then echo "alphasys: success."; fi
         exit 0
     fi
