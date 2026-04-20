@@ -10,15 +10,15 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-echo "[install] Copying project to ${INSTALL_DIR} ..."
+echo "Copying project to ${INSTALL_DIR} ..."
 mkdir -p "${INSTALL_DIR}"
 cp -r "${SCRIPT_DIR}/bin"       "${INSTALL_DIR}/"
 cp -r "${SCRIPT_DIR}/resources" "${INSTALL_DIR}/"
 
-echo "[install] Setting permissions ..."
+echo "Setting permissions ..."
 chmod +x "${INSTALL_DIR}/bin/alphasys"
 
-echo "[install] Creating symlink: ${BIN_LINK} -> ${INSTALL_DIR}/bin/alphasys"
+echo "Creating symlink: ${BIN_LINK} -> ${INSTALL_DIR}/bin/alphasys"
 ln -sf "${INSTALL_DIR}/bin/alphasys" "${BIN_LINK}"
 
-echo "[install] Done. Run: alphasys --help"
+echo "Done. Run: alphasys --help"
