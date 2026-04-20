@@ -50,7 +50,7 @@ target paths on the system.
 
 ```
 alphasys/
-├── bin/
+├── application/
 │   └── alphasys          # Main executable script
 ├── guides/
 │   ├── iptable           # Addressing table
@@ -80,7 +80,7 @@ bash install.sh
 
 The installer:
 1. Copies the project to `/root/alphasys/`
-2. Creates a symlink `/usr/local/bin/alphasys → /root/alphasys/bin/alphasys`
+2. Creates a symlink `/usr/local/bin/alphasys → /root/alphasys/application/alphasys`
 
 After installation `alphasys` is available as a global command.
 

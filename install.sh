@@ -12,13 +12,13 @@ fi
 
 echo "Copying project to ${INSTALL_DIR} ..."
 mkdir -p "${INSTALL_DIR}"
-cp -r "${SCRIPT_DIR}/bin"       "${INSTALL_DIR}/"
-cp -r "${SCRIPT_DIR}/resources" "${INSTALL_DIR}/"
+cp -r "${SCRIPT_DIR}/application" "${INSTALL_DIR}/"
+cp -r "${SCRIPT_DIR}/resources"   "${INSTALL_DIR}/"
 
 echo "Setting permissions ..."
-chmod +x "${INSTALL_DIR}/bin/alphasys"
+chmod +x "${INSTALL_DIR}/application/alphasys"
 
-echo "Creating symlink: ${BIN_LINK} -> ${INSTALL_DIR}/bin/alphasys"
-ln -sf "${INSTALL_DIR}/bin/alphasys" "${BIN_LINK}"
+echo "Creating symlink: ${BIN_LINK} -> ${INSTALL_DIR}/application/alphasys"
+ln -sf "${INSTALL_DIR}/application/alphasys" "${BIN_LINK}"
 
 echo "Done. Run: alphasys --help"
