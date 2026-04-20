@@ -58,8 +58,12 @@ target paths on the system.
 alphasys/
 ├── bin/
 │   └── alphasys          # Main executable script
+├── guides/
+│   ├── iptable           #
+│   └── xterm.js          #
 ├── resources/
 │   └── network_setup/
+│       ├── common/       # Frequently used files
 │       ├── isp/          # ISP config files
 │       ├── headquarters/
 │       │   ├── router/   # HQ-RTR config files
