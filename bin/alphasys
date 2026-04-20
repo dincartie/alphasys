@@ -57,7 +57,7 @@ err()  {
 }
 
 run() {
-    _p ">> $*"
+    _p "> $*"
     if $VERBOSE; then
         local _tmp
         _tmp=$(mktemp)
