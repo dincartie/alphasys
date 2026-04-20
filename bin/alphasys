@@ -8,7 +8,8 @@ while [ -L "$SCRIPT_SOURCE" ]; do
     [[ "$SCRIPT_SOURCE" != /* ]] && SCRIPT_SOURCE="$SCRIPT_DIR/$SCRIPT_SOURCE"
 done
 SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_SOURCE")" && pwd)"
-RESOURCES_DIR="${SCRIPT_DIR}/resources"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+RESOURCES_DIR="${PROJECT_DIR}/resources"
 
 MACHINE_ID=""
 MODULE=""
@@ -213,7 +214,7 @@ ns_isp() {
 }
 
 # VMID 101 HQ-RTR
-ns_hq_rtr() {
+ns_hq_router() {
     info "network_setup: ${MACHINE_ID}"
 
     info "Setting hostname: hq-rtr.au-team.irpo"
@@ -293,11 +294,26 @@ ns_hq_rtr() {
     info "Enabling and starting dhcpd"
     run systemctl enable --now dhcpd
 
+    if id net_admin &>/dev/null; then
+        info "User 'net_admin' already exists — skipping useradd"
+    else
+        info "Creating user: net_admin"
+        run useradd net_admin -m -U -s /bin/bash
+    fi
+    info "Setting password for net_admin"
+    run bash -c "echo 'net_admin:P@ssw0rd' | chpasswd"
+    info "Adding net_admin to wheel group"
+    run usermod -aG wheel net_admin
+    info "Deploying sudoers (NOPASSWD for net_admin)"
+    run chmod 640 /etc/sudoers
+    deploy "network_setup/headquarters/router/etc/sudoers" /etc/sudoers
+    run chmod 440 /etc/sudoers
+
     ok "101 VMID network setup complete."
 }
 
 # VMID 102 BR-RTR
-ns_br_rtr() {
+ns_br_router() {
     info "network_setup: ${MACHINE_ID}"
 
     info "Setting hostname: br-rtr.au-team.irpo"
@@ -355,11 +371,26 @@ ns_br_rtr() {
     info "Enabling and starting frr"
     run systemctl enable --now frr
 
+    if id net_admin &>/dev/null; then
+        info "User 'net_admin' already exists — skipping useradd"
+    else
+        info "Creating user: net_admin"
+        run useradd net_admin -m -U -s /bin/bash
+    fi
+    info "Setting password for net_admin"
+    run bash -c "echo 'net_admin:P@ssw0rd' | chpasswd"
+    info "Adding net_admin to wheel group"
+    run usermod -aG wheel net_admin
+    info "Deploying sudoers (NOPASSWD for net_admin)"
+    run chmod 640 /etc/sudoers
+    deploy "network_setup/branch/router/etc/sudoers" /etc/sudoers
+    run chmod 440 /etc/sudoers
+
     ok "102 VMID network setup complete."
 }
 
 # VMID 103 HQ-SRV
-ns_hq_srv() {
+ns_hq_server() {
     info "network_setup: ${MACHINE_ID}"
 
     info "Setting hostname: hq-srv.au-team.irpo"
@@ -426,11 +457,28 @@ ns_hq_srv() {
     info "Restarting sshd"
     run systemctl restart sshd
 
+    if id sshuser &>/dev/null; then
+        info "User 'sshuser' already exists — skipping useradd"
+    else
+        info "Creating user: sshuser"
+        run useradd sshuser -m -U -s /bin/bash
+    fi
+    info "Setting password for sshuser"
+    run bash -c "echo 'sshuser:P@ssw0rd' | chpasswd"
+    info "Setting UID 2026 for sshuser"
+    run usermod -u 2026 sshuser
+    info "Adding sshuser to wheel group"
+    run usermod -aG wheel sshuser
+    info "Deploying sudoers (NOPASSWD for sshuser)"
+    run chmod 640 /etc/sudoers
+    deploy "network_setup/headquarters/server/etc/sudoers" /etc/sudoers
+    run chmod 440 /etc/sudoers
+
     ok "103 VMID network setup complete."
 }
 
 # VMID 104 BR-SRV
-ns_br_srv() {
+ns_br_server() {
     info "network_setup: ${MACHINE_ID}"
 
     info "Setting hostname: br-srv.au-team.irpo"
@@ -453,11 +501,28 @@ ns_br_srv() {
     info "Restarting sshd"
     run systemctl restart sshd
 
+    if id sshuser &>/dev/null; then
+        info "User 'sshuser' already exists — skipping useradd"
+    else
+        info "Creating user: sshuser"
+        run useradd sshuser -m -U -s /bin/bash
+    fi
+    info "Setting password for sshuser"
+    run bash -c "echo 'sshuser:P@ssw0rd' | chpasswd"
+    info "Setting UID 2026 for sshuser"
+    run usermod -u 2026 sshuser
+    info "Adding sshuser to wheel group"
+    run usermod -aG wheel sshuser
+    info "Deploying sudoers (NOPASSWD for sshuser)"
+    run chmod 640 /etc/sudoers
+    deploy "network_setup/branch/server/etc/sudoers" /etc/sudoers
+    run chmod 440 /etc/sudoers
+
     ok "104 VMID network setup complete."
 }
 
 # VMID 105 HQ-CLI
-ns_hq_cli() {
+ns_hq_client() {
     info "network_setup: ${MACHINE_ID}"
 
     info "Setting hostname: hq-cli.au-team.irpo"
@@ -474,22 +539,22 @@ ns_hq_cli() {
 run_network_setup() {
     info "module: network_setup"
     case "${VMID_ROLE[$MACHINE_ID]}" in
-        isp)    ns_isp    ;;
-        hq-rtr) ns_hq_rtr ;;
-        br-rtr) ns_br_rtr ;;
-        hq-srv) ns_hq_srv ;;
-        br-srv) ns_br_srv ;;
-        hq-cli) ns_hq_cli ;;
+        isp)    ns_isp       ;;
+        hq-rtr) ns_hq_router ;;
+        br-rtr) ns_br_router ;;
+        hq-srv) ns_hq_server ;;
+        br-srv) ns_br_server ;;
+        hq-cli) ns_hq_client ;;
     esac
 }
 
-#  MODULE: network_admin (not yet implemented)
+# MODULE: network_admin (not yet implemented)
 run_network_admin() {
     info "module: network_admin"
     warn "network_admin: no tasks implemented yet."
 }
 
-#  MODULE: hybrid (not yet implemented)
+# MODULE: hybrid (not yet implemented)
 run_hybrid() {
     info "module: hybrid"
     warn "hybrid: no tasks implemented yet."
@@ -506,8 +571,8 @@ main() {
     local role="${VMID_ROLE[$MACHINE_ID]}"
     local hostname="${VMID_HOSTNAME[$MACHINE_ID]}"
 
-    _p "  alphasys starting"
-    _p "  Machine ID : ${MACHINE_ID}  (${role}  /  ${hostname})"
+    _p " alphasys starting"
+    _p " Machine ID : ${MACHINE_ID}  (${role}  /  ${hostname})"
 
     case "$MODULE" in
         network_setup) run_network_setup ;;
@@ -516,11 +581,11 @@ main() {
     esac
 
     if $HAD_ERROR; then
-        _p "  Result: failed.  (see /root/alphasys_result.log for details)"
+        _p "Result: failed.  (see /root/alphasys_result.log for details)"
         if ! $VERBOSE; then echo "alphasys: failed."; fi
         exit 1
     else
-        _p "  Result: success."
+        _p "Result: success."
         if ! $VERBOSE; then echo "alphasys: success."; fi
         exit 0
     fi
